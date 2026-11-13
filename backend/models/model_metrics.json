@@ -7,7 +7,7 @@
       "recall": 100.0,
       "f1": 100.0
     },
-    "Forest & Dense Vegetation": {
+    "Forest & Canopy": {
       "precision": 100.0,
       "recall": 100.0,
       "f1": 100.0
@@ -30,7 +30,7 @@
   },
   "confusion_matrix": [
     [
-      500,
+      600,
       0,
       0,
       0,
@@ -38,7 +38,7 @@
     ],
     [
       0,
-      500,
+      600,
       0,
       0,
       0
@@ -46,7 +46,7 @@
     [
       0,
       0,
-      500,
+      600,
       0,
       0
     ],
@@ -54,7 +54,7 @@
       0,
       0,
       0,
-      500,
+      600,
       0
     ],
     [
@@ -62,18 +62,17 @@
       0,
       0,
       0,
-      500
+      600
     ]
   ],
   "n_estimators": 80,
   "features": [
-    "Blue",
-    "Green",
     "Red",
-    "NIR",
-    "SWIR",
-    "NDVI",
-    "NDWI",
-    "NDBI"
+    "Green",
+    "Blue",
+    "NGRDI",
+    "VARI",
+    "Water_Index",
+    "Albedo"
   ]
 }
