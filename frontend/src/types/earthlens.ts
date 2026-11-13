@@ -4,12 +4,15 @@ export interface StudyArea {
   description: string;
   center: [number, number]; // [lon, lat]
   zoom: number;
-  bbox: [number, number, number, number];
   dates: {
     before: string;
     after: string;
   };
   attribution: string;
+  tileUrls?: {
+    before: string;
+    after: string;
+  };
 }
 
 export interface LandCoverDistribution {

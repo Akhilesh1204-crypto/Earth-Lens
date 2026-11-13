@@ -25,36 +25,39 @@ export const SatelliteMap: React.FC<SatelliteMapProps> = ({
   overlayOpacity,
   viewMode,
 }) => {
-  const mapContainer = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
+  const mapBeforeContainer = useRef<HTMLDivElement>(null);
+  const mapAfterContainer = useRef<HTMLDivElement>(null);
+  const mapBefore = useRef<maplibregl.Map | null>(null);
+  const mapAfter = useRef<maplibregl.Map | null>(null);
+  const isSyncing = useRef(false);
   const [isDraggingSlider, setIsDraggingSlider] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Initialize MapLibre GL instance
+  // Initialize synchronized dual high-res maps
   useEffect(() => {
-    if (!mapContainer.current || mapRef.current) return;
+    if (!mapBeforeContainer.current || !mapAfterContainer.current) return;
 
-    const map = new maplibregl.Map({
-      container: mapContainer.current,
+    const beforeTile = studyArea.tileUrls?.before || 'https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/10/{z}/{y}/{x}';
+    const afterTile = studyArea.tileUrls?.after || 'https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/43291/{z}/{y}/{x}';
+
+    // Before Map
+    const mb = new maplibregl.Map({
+      container: mapBeforeContainer.current,
       style: {
         version: 8,
         sources: {
-          'esri-satellite': {
+          'satellite-before': {
             type: 'raster',
-            tiles: [
-              'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-            ],
+            tiles: [beforeTile],
             tileSize: 256,
-            attribution: 'Esri, Maxar, Earthstar Geographics, USDA, USGS, AeroGRID, IGN, and the GIS User Community',
+            maxzoom: 19,
           },
         },
         layers: [
           {
-            id: 'esri-satellite-layer',
+            id: 'satellite-before-layer',
             type: 'raster',
-            source: 'esri-satellite',
-            minzoom: 0,
-            maxzoom: 19,
+            source: 'satellite-before',
           },
         ],
       },
@@ -63,28 +66,78 @@ export const SatelliteMap: React.FC<SatelliteMapProps> = ({
       attributionControl: false,
     });
 
-    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left');
-    mapRef.current = map;
+    // After Map
+    const ma = new maplibregl.Map({
+      container: mapAfterContainer.current,
+      style: {
+        version: 8,
+        sources: {
+          'satellite-after': {
+            type: 'raster',
+            tiles: [afterTile],
+            tileSize: 256,
+            maxzoom: 19,
+          },
+        },
+        layers: [
+          {
+            id: 'satellite-after-layer',
+            type: 'raster',
+            source: 'satellite-after',
+          },
+        ],
+      },
+      center: studyArea.center,
+      zoom: studyArea.zoom,
+      attributionControl: false,
+    });
+
+    // Sync zoom, pan, and pitch across both views
+    const syncMaps = (source: maplibregl.Map, target: maplibregl.Map) => {
+      source.on('move', () => {
+        if (isSyncing.current) return;
+        isSyncing.current = true;
+        target.jumpTo({
+          center: source.getCenter(),
+          zoom: source.getZoom(),
+          bearing: source.getBearing(),
+          pitch: source.getPitch(),
+        });
+        isSyncing.current = false;
+      });
+    };
+
+    syncMaps(mb, ma);
+    syncMaps(ma, mb);
+
+    mapBefore.current = mb;
+    mapAfter.current = ma;
 
     return () => {
-      map.remove();
-      mapRef.current = null;
+      mb.remove();
+      ma.remove();
+      mapBefore.current = null;
+      mapAfter.current = null;
     };
   }, []);
 
-  // Update map center when study area changes
+  // Update center & zoom when study area changes
   useEffect(() => {
-    if (mapRef.current) {
-      mapRef.current.flyTo({
+    if (mapBefore.current && mapAfter.current) {
+      mapBefore.current.flyTo({
         center: studyArea.center,
         zoom: studyArea.zoom,
-        essential: true,
-        duration: 2000,
+        duration: 1500,
+      });
+      mapAfter.current.flyTo({
+        center: studyArea.center,
+        zoom: studyArea.zoom,
+        duration: 1500,
       });
     }
   }, [studyArea]);
 
-  // Handle slider drag events
+  // Pointer drag events for the split slider
   const handlePointerDown = (e: React.PointerEvent) => {
     setIsDraggingSlider(true);
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -114,151 +167,125 @@ export const SatelliteMap: React.FC<SatelliteMapProps> = ({
       onPointerUp={handlePointerUp}
       className="relative flex-1 h-full w-full bg-slate-950 overflow-hidden select-none"
     >
-      {/* Basemap Canvas */}
-      <div ref={mapContainer} className="absolute inset-0 w-full h-full" />
+      {/* Background: After (Recent) Full Interactive Map */}
+      <div
+        ref={mapAfterContainer}
+        className="absolute inset-0 w-full h-full"
+        style={{
+          display: viewMode === 'before' ? 'none' : 'block',
+        }}
+      />
 
-      {/* Satellite Imagery & Analysis Canvas Overlay */}
-      {analysis && (
-        <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-4">
-          <div className="relative w-full max-w-4xl aspect-[4/3] rounded-2xl overflow-hidden border border-cyan-500/30 shadow-2xl shadow-cyan-950/80 bg-slate-950/40 backdrop-blur-sm pointer-events-auto">
-            {/* View Mode: AFTER / Right Side */}
-            <div className="absolute inset-0 w-full h-full">
+      {/* Foreground: Before (Historical) Full Interactive Map clipped by slider */}
+      <div
+        ref={mapBeforeContainer}
+        className="absolute inset-0 w-full h-full"
+        style={{
+          clipPath:
+            viewMode === 'split'
+              ? `polygon(0 0, ${sliderPos}% 0, ${sliderPos}% 100%, 0 100%)`
+              : viewMode === 'before'
+              ? 'polygon(0 0, 100% 0, 100% 100%, 0 100%)'
+              : 'none',
+          display: viewMode === 'after' ? 'none' : 'block',
+        }}
+      />
+
+      {/* Real-time ML Overlays */}
+      {analysis && (showClassOverlay || showChangeOverlay || viewMode === 'difference') && (
+        <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-8">
+          <div className="relative w-full max-w-2xl aspect-square rounded-2xl overflow-hidden border border-cyan-500/40 shadow-2xl bg-slate-950/20 backdrop-blur-[2px]">
+            {showClassOverlay && (
               <img
-                src={analysis.images.satelliteAfter}
-                alt="Satellite After"
-                className="w-full h-full object-cover"
+                src={sliderPos > 50 ? analysis.images.classificationAfter : analysis.images.classificationBefore}
+                alt="ML Classification"
+                style={{ opacity: overlayOpacity }}
+                className="absolute inset-0 w-full h-full object-cover transition-opacity duration-200"
               />
-              {/* Optional Land Cover Classification After */}
-              {showClassOverlay && (
-                <img
-                  src={analysis.images.classificationAfter}
-                  alt="Classification After"
-                  style={{ opacity: overlayOpacity }}
-                  className="absolute inset-0 w-full h-full object-cover transition-opacity duration-200"
-                />
-              )}
-            </div>
-
-            {/* Split Slider: BEFORE / Left Side (Clipped via clip-path) */}
-            {viewMode === 'split' && (
-              <div
-                className="absolute inset-0 w-full h-full overflow-hidden"
-                style={{
-                  clipPath: `polygon(0 0, ${sliderPos}% 0, ${sliderPos}% 100%, 0 100%)`,
-                }}
-              >
-                <img
-                  src={analysis.images.satelliteBefore}
-                  alt="Satellite Before"
-                  className="w-full h-full object-cover"
-                />
-                {showClassOverlay && (
-                  <img
-                    src={analysis.images.classificationBefore}
-                    alt="Classification Before"
-                    style={{ opacity: overlayOpacity }}
-                    className="absolute inset-0 w-full h-full object-cover transition-opacity duration-200"
-                  />
-                )}
-              </div>
             )}
-
-            {/* Full Before View Mode */}
-            {viewMode === 'before' && (
-              <div className="absolute inset-0 w-full h-full">
-                <img
-                  src={analysis.images.satelliteBefore}
-                  alt="Satellite Before"
-                  className="w-full h-full object-cover"
-                />
-                {showClassOverlay && (
-                  <img
-                    src={analysis.images.classificationBefore}
-                    alt="Classification Before"
-                    style={{ opacity: overlayOpacity }}
-                    className="absolute inset-0 w-full h-full object-cover transition-opacity duration-200"
-                  />
-                )}
-              </div>
-            )}
-
-            {/* Change Anomaly Overlay (shows pixel transitions) */}
             {(showChangeOverlay || viewMode === 'difference') && (
               <img
                 src={analysis.images.changeOverlay}
-                alt="Change Detection Anomaly Overlay"
+                alt="ML Change Anomaly"
                 style={{ opacity: viewMode === 'difference' ? 0.95 : overlayOpacity }}
-                className="absolute inset-0 w-full h-full object-cover mix-blend-screen pointer-events-none transition-opacity duration-200"
+                className="absolute inset-0 w-full h-full object-cover mix-blend-screen transition-opacity duration-200"
               />
             )}
-
-            {/* Draggable Divider Bar */}
-            {viewMode === 'split' && (
-              <div
-                onPointerDown={handlePointerDown}
-                style={{ left: `${sliderPos}%` }}
-                className="absolute top-0 bottom-0 w-1 -ml-0.5 bg-gradient-to-b from-cyan-400 via-emerald-400 to-cyan-400 cursor-ew-resize z-30 shadow-[0_0_12px_rgba(0,240,255,0.8)] flex items-center justify-center hover:w-1.5 transition-[width]"
-              >
-                {/* Thumb Pill */}
-                <div className="w-8 h-8 rounded-full bg-slate-950 border-2 border-cyan-400 flex items-center justify-center shadow-lg shadow-cyan-500/50 text-cyan-300 font-mono text-[10px]">
-                  ⬄
-                </div>
-              </div>
-            )}
-
-            {/* In-viewport Temporal Epoch Badges */}
-            <div className="absolute top-3 left-3 z-20 px-2.5 py-1 rounded bg-slate-950/80 border border-cyan-500/30 text-cyan-400 font-mono text-xs backdrop-blur-md">
-              <span className="text-slate-400">EPOCH T0:</span> {studyArea.dates.before}
-            </div>
-
-            <div className="absolute top-3 right-3 z-20 px-2.5 py-1 rounded bg-slate-950/80 border border-emerald-500/30 text-emerald-400 font-mono text-xs backdrop-blur-md">
-              <span className="text-slate-400">EPOCH T1:</span> {studyArea.dates.after}
-            </div>
-
-            {/* Change rate watermark badge */}
-            <div className="absolute bottom-3 right-3 z-20 px-3 py-1.5 rounded-lg bg-slate-950/85 border border-cyan-500/30 backdrop-blur-md flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
-              <span className="text-[11px] font-mono text-slate-300">
-                CHANGED SURFACE: <strong className="text-cyan-400">{analysis.summary.changePercentage}%</strong> ({analysis.summary.totalChangedAreaKm2} km²)
-              </span>
+            <div className="absolute bottom-3 left-3 px-2 py-1 rounded bg-slate-950/80 border border-cyan-500/30 font-mono text-[10px] text-cyan-300">
+              ML TENSOR OVERLAY ACTIVATED
             </div>
           </div>
         </div>
       )}
 
-      {/* Map Control HUD Overlay */}
-      <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
-        <div className="flex flex-col rounded-lg bg-slate-950/80 backdrop-blur-md border border-cyan-500/20 p-1 shadow-lg">
-          <button
-            onClick={() => mapRef.current?.zoomIn()}
-            className="p-2 text-slate-300 hover:text-cyan-400 hover:bg-slate-900 rounded transition-colors"
-            title="Zoom In"
-          >
-            <ZoomIn className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => mapRef.current?.zoomOut()}
-            className="p-2 text-slate-300 hover:text-cyan-400 hover:bg-slate-900 rounded transition-colors"
-            title="Zoom Out"
-          >
-            <ZoomOut className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => mapRef.current?.resetNorthPitch()}
-            className="p-2 text-slate-300 hover:text-cyan-400 hover:bg-slate-900 rounded transition-colors"
-            title="Reset North Orientation"
-          >
-            <Compass className="w-4 h-4" />
-          </button>
+      {/* Draggable Divider Bar */}
+      {viewMode === 'split' && (
+        <div
+          onPointerDown={handlePointerDown}
+          style={{ left: `${sliderPos}%` }}
+          className="absolute top-0 bottom-0 w-1 -ml-0.5 bg-gradient-to-b from-cyan-400 via-emerald-400 to-cyan-400 cursor-ew-resize z-30 shadow-[0_0_15px_rgba(0,240,255,1)] flex items-center justify-center hover:w-2 transition-[width]"
+        >
+          <div className="w-9 h-9 rounded-full bg-slate-950 border-2 border-cyan-400 flex items-center justify-center shadow-xl shadow-cyan-500/60 text-cyan-300 font-mono text-xs hover:scale-110 transition-transform">
+            ⬄
+          </div>
         </div>
+      )}
+
+      {/* Floating Epoch Badges */}
+      <div className="absolute top-4 left-4 z-20 px-3 py-1.5 rounded-lg bg-slate-950/85 border border-cyan-500/30 text-cyan-400 font-mono text-xs backdrop-blur-md shadow-lg flex items-center gap-2">
+        <span className="w-2 h-2 rounded-full bg-cyan-400" />
+        <span>HISTORICAL EPOCH: <strong>{studyArea.dates.before}</strong></span>
       </div>
 
-      {/* Floating HUD status in bottom corner */}
-      <div className="absolute bottom-4 left-4 z-10 px-3 py-1.5 rounded bg-slate-950/80 border border-slate-800 text-[10px] font-mono text-slate-400 backdrop-blur-md flex items-center gap-2">
-        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+      <div className="absolute top-4 right-16 z-20 px-3 py-1.5 rounded-lg bg-slate-950/85 border border-emerald-500/30 text-emerald-400 font-mono text-xs backdrop-blur-md shadow-lg flex items-center gap-2">
+        <span className="w-2 h-2 rounded-full bg-emerald-400" />
+        <span>RECENT EPOCH: <strong>{studyArea.dates.after}</strong></span>
+      </div>
+
+      {/* HUD Controls */}
+      <div className="absolute top-4 right-4 z-20 flex flex-col gap-1.5 rounded-lg bg-slate-950/85 backdrop-blur-md border border-cyan-500/30 p-1 shadow-lg">
+        <button
+          onClick={() => {
+            mapBefore.current?.zoomIn();
+            mapAfter.current?.zoomIn();
+          }}
+          className="p-2 text-slate-300 hover:text-cyan-400 hover:bg-slate-900 rounded transition-colors"
+          title="Zoom In"
+        >
+          <ZoomIn className="w-4 h-4" />
+        </button>
+        <button
+          onClick={() => {
+            mapBefore.current?.zoomOut();
+            mapAfter.current?.zoomOut();
+          }}
+          className="p-2 text-slate-300 hover:text-cyan-400 hover:bg-slate-900 rounded transition-colors"
+          title="Zoom Out"
+        >
+          <ZoomOut className="w-4 h-4" />
+        </button>
+        <button
+          onClick={() => {
+            mapBefore.current?.resetNorthPitch();
+            mapAfter.current?.resetNorthPitch();
+          }}
+          className="p-2 text-slate-300 hover:text-cyan-400 hover:bg-slate-900 rounded transition-colors"
+          title="Reset Orientation"
+        >
+          <Compass className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* HUD Info Watermark */}
+      <div className="absolute bottom-4 left-4 z-20 px-3.5 py-1.5 rounded-lg bg-slate-950/85 border border-slate-800 text-[11px] font-mono text-slate-300 backdrop-blur-md flex items-center gap-3 shadow-lg">
+        <div className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+          <span className="text-cyan-400 font-semibold">{studyArea.name}</span>
+        </div>
+        <span className="text-slate-600">|</span>
+        <span>IMAGERY: SUB-METER HIGH-RES (MAXAR / ESRI)</span>
+        <span className="text-slate-600">|</span>
         <span>COORDINATES: {studyArea.center[1].toFixed(4)}°N, {studyArea.center[0].toFixed(4)}°E</span>
-        <span className="text-slate-400">|</span>
-        <span>RESOLUTION: 10M/PX (SENTINEL-2 MSI)</span>
       </div>
     </div>
   );
